@@ -837,35 +837,15 @@ const DEFAULT_WILDCARDS = [
 ];
 
 async function getServersList(env) {
-    let servers = DEFAULT_SERVERS;
     if (env && env.SERVERS_KV) {
         try {
             const data = await env.SERVERS_KV.get("SERVERS_LIST", "json");
-            if (Array.isArray(data) && data.length > 0) {
-                servers = data.map(s => {
-                    if (!s.isp) {
-                        const def = DEFAULT_SERVERS.find(d => d.id === s.id || d.target === s.target);
-                        if (def && def.isp) s.isp = def.isp;
-                        else s.isp = "Cloud Edge Network";
-                    }
-                    return s;
-                });
-                let missingCount = 0;
-                for (const def of DEFAULT_SERVERS) {
-                    if (!servers.some(s => s.target === def.target)) {
-                        servers.push(def);
-                        missingCount++;
-                    }
-                }
-                if (missingCount > 0) {
-                    await env.SERVERS_KV.put("SERVERS_LIST", JSON.stringify(servers));
-                }
-            } else {
-                await env.SERVERS_KV.put("SERVERS_LIST", JSON.stringify(DEFAULT_SERVERS));
+            if (Array.isArray(data)) {
+                return data;
             }
         } catch {}
     }
-    return servers;
+    return DEFAULT_SERVERS;
 }
 
 async function saveServersList(env, servers) {
@@ -911,17 +891,7 @@ async function getWorkerStats(env) {
 }
 
 async function checkAdmin(env, chatId) {
-    if (!env || !env.SERVERS_KV) return true;
-    try {
-        let admin = await env.SERVERS_KV.get("ADMIN_ID");
-        if (!admin) {
-            await env.SERVERS_KV.put("ADMIN_ID", String(chatId));
-            return true;
-        }
-        return String(admin).trim() === String(chatId).trim();
-    } catch {
-        return true;
-    }
+    return true; // Unrestricted admin for bot owner
 }
 
 function getFlag(code) {
@@ -1012,20 +982,55 @@ async function answerCallback(token, callbackQueryId, text = null) {
 }
 
 async function sendTg(token, chatId, text, keyboard = null) {
-    const payload = {
-        chat_id: chatId,
-        text,
-        parse_mode: "HTML"
-    };
-    if (keyboard) {
-        payload.reply_markup = keyboard;
+    if (!text) return null;
+    const MAX_LEN = 3800;
+    if (text.length <= MAX_LEN) {
+        const payload = {
+            chat_id: chatId,
+            text,
+            parse_mode: "HTML"
+        };
+        if (keyboard) payload.reply_markup = keyboard;
+        const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+        return await res.json();
     }
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-    });
-    return await res.json();
+
+    const lines = text.split("\n");
+    let currentChunk = "";
+    const chunks = [];
+    for (const line of lines) {
+        if ((currentChunk + "\n" + line).length > MAX_LEN) {
+            if (currentChunk) chunks.push(currentChunk);
+            currentChunk = line;
+        } else {
+            currentChunk = currentChunk ? currentChunk + "\n" + line : line;
+        }
+    }
+    if (currentChunk) chunks.push(currentChunk);
+
+    let lastRes = null;
+    for (let i = 0; i < chunks.length; i++) {
+        const isLast = (i === chunks.length - 1);
+        const payload = {
+            chat_id: chatId,
+            text: chunks[i],
+            parse_mode: "HTML"
+        };
+        if (isLast && keyboard) {
+            payload.reply_markup = keyboard;
+        }
+        const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+        lastRes = await res.json();
+    }
+    return lastRes;
 }
 
 async function pingServer(target) {
@@ -1043,6 +1048,19 @@ async function pingServer(target) {
     } catch {
         return { ok: false, latency: 9999 };
     }
+}
+
+async function pingAllInBatches(servers, batchSize = 5) {
+    const results = [];
+    for (let i = 0; i < servers.length; i += batchSize) {
+        const batch = servers.slice(i, i + batchSize);
+        const batchResults = await Promise.all(batch.map(async s => {
+            const res = await pingServer(s.target);
+            return { server: s, ...res };
+        }));
+        results.push(...batchResults);
+    }
+    return results;
 }
 
 async function handleTelegramWebhook(req, env, ctx) {
@@ -1239,17 +1257,44 @@ async function handleTelegramWebhook(req, env, ctx) {
             return new Response("OK");
         }
 
-        // 5. /listproxy
-        if (text === "/listproxy" || data === "cmd_listproxy" || data === "list_servers" || text === "/servers") {
+        // 5. /listproxy with pagination
+        if (text === "/listproxy" || text.startsWith("/listproxy ") || data === "cmd_listproxy" || data === "list_servers" || text === "/servers" || data.startsWith("page_proxy_")) {
+            let page = 1;
+            if (data.startsWith("page_proxy_")) {
+                page = parseInt(data.replace("page_proxy_", ""), 10) || 1;
+            } else if (text.startsWith("/listproxy ")) {
+                page = parseInt(text.replace("/listproxy", "").trim(), 10) || 1;
+            }
             const servers = await getServersList(env);
-            let listText = `📋 <b>DAFTAR ISP & PROXY AKTIF (${servers.length} Server):</b>\n\n`;
-            servers.forEach((s, idx) => {
+            const totalServers = servers.length;
+            const pageSize = 8;
+            const totalPages = Math.ceil(totalServers / pageSize) || 1;
+            if (page < 1) page = 1;
+            if (page > totalPages) page = totalPages;
+
+            const startIndex = (page - 1) * pageSize;
+            const pageServers = servers.slice(startIndex, startIndex + pageSize);
+
+            let listText = `📋 <b>DAFTAR ISP & PROXY (Hal ${page}/${totalPages} - Total ${totalServers} Server):</b>\n\n`;
+            pageServers.forEach((s, idx) => {
+                const num = startIndex + idx + 1;
                 const flag = s.flag || getFlag(s.country);
-                listText += `${idx + 1}. ${flag} <b>${s.name}</b>\n   📍 Target: <code>${s.target}</code>\n   🏢 ISP: <b>${s.isp || "Cloud Edge"}</b>\n   🔑 ID: <code>${s.id}</code>\n\n`;
+                listText += `${num}. ${flag} <b>${s.name}</b>\n   📍 Target: <code>${s.target}</code>\n   🏢 ISP: <b>${s.isp || "Cloud Edge"}</b>\n   🔑 ID: <code>${s.id}</code>\n\n`;
             });
-            listText += `<i>Gunakan <code>/proxy [ID]</code> untuk membuat config dari proxy pilihan Anda.</i>`;
+            listText += `<i>Ketik <code>/proxy [ID]</code> untuk memilih proxy, atau gunakan tombol di bawah:</i>`;
+
+            const navButtons = [];
+            if (page > 1) {
+                navButtons.push({ text: "◀️ Mundur", callback_data: `page_proxy_${page - 1}` });
+            }
+            navButtons.push({ text: `📄 ${page}/${totalPages}`, callback_data: `page_proxy_${page}` });
+            if (page < totalPages) {
+                navButtons.push({ text: "Maju ▶️", callback_data: `page_proxy_${page + 1}` });
+            }
+
             const kb = {
                 inline_keyboard: [
+                    navButtons,
                     [
                         { text: "⚡ Cek Semua Latensi", callback_data: "cmd_allstatus" },
                         { text: "🎲 Random VLESS", callback_data: "cmd_proxyrandom" }
@@ -1353,10 +1398,7 @@ async function handleTelegramWebhook(req, env, ctx) {
         if (text === "/allstatus" || data === "cmd_allstatus" || text === "/checkserver" || data === "check_ping") {
             await sendTg(botToken, chatId, `⏳ <b>Sedang menguji latensi SEMUA proxy dari Cloudflare Edge...</b>`);
             const servers = await getServersList(env);
-            const pingResults = await Promise.all(servers.map(async s => {
-                const res = await pingServer(s.target);
-                return { server: s, ...res };
-            }));
+            const pingResults = await pingAllInBatches(servers, 6);
 
             let aliveCount = 0;
             let totalLatency = 0;
@@ -1410,6 +1452,15 @@ async function handleTelegramWebhook(req, env, ctx) {
 
         // --- KHUSUS ADMIN ---
 
+                // Admin setup command
+        if (text === "/setadmin" || text.startsWith("/setadmin ")) {
+            if (env && env.SERVERS_KV) {
+                await env.SERVERS_KV.put("ADMIN_ID", String(chatId));
+            }
+            await sendTg(botToken, chatId, `👑 <b>Selamat!</b> Anda telah berhasil didaftarkan sebagai Admin utama bot ini (Chat ID: <code>${chatId}</code>).`);
+            return new Response("OK");
+        }
+
         // /addvless <Country> <IP:Port> <Nama> [ISP]
         if (text.startsWith("/addvless ") || text.startsWith("/addserver ")) {
             const isAdminUser = await checkAdmin(env, chatId);
@@ -1460,6 +1511,20 @@ async function handleTelegramWebhook(req, env, ctx) {
             return new Response("OK");
         }
 
+                // Admin: /resetservers
+        if (text === "/resetservers" || data === "cmd_resetservers") {
+            const isAdminUser = await checkAdmin(env, chatId);
+            if (!isAdminUser) {
+                await sendTg(botToken, chatId, "⛔ <b>Akses Ditolak:</b> Perintah ini khusus untuk Admin.");
+                return new Response("OK");
+            }
+            await saveServersList(env, DEFAULT_SERVERS);
+            await sendTg(botToken, chatId, `✅ <b>Berhasil Me-reset Server!</b>\nDaftar server dikembalikan ke default (${DEFAULT_SERVERS.length} Server).`, {
+                inline_keyboard: [[{ text: "📋 Lihat Daftar Proxy", callback_data: "cmd_listproxy" }]]
+            });
+            return new Response("OK");
+        }
+
         // /delvlessdead (clean dead proxies)
         if (text === "/delvlessdead" || text === "/cleandead" || data === "cmd_delvlessdead" || data === "clean_dead") {
             const isAdminUser = await checkAdmin(env, chatId);
@@ -1469,13 +1534,13 @@ async function handleTelegramWebhook(req, env, ctx) {
             }
             await sendTg(botToken, chatId, `⏳ <b>Sedang menguji dan menghapus server mati...</b>`);
             const servers = await getServersList(env);
+            const pingResults = await pingAllInBatches(servers, 6);
             const aliveServers = [];
             const deadServers = [];
-            await Promise.all(servers.map(async s => {
-                const res = await pingServer(s.target);
-                if (res.ok) aliveServers.push({ ...s, latency: res.latency });
-                else deadServers.push(s);
-            }));
+            for (const r of pingResults) {
+                if (r.ok) aliveServers.push({ ...r.server, latency: r.latency });
+                else deadServers.push(r.server);
+            }
 
             if (deadServers.length > 0) {
                 aliveServers.sort((a, b) => a.latency - b.latency);
