@@ -1,0 +1,25 @@
+{
+  "name": "avenia-workers",
+  "version": "1.0.0",
+  "description": "Advanced Cloudflare Workers VLESS WebSocket Tunnel with Telegram Bot Management",
+  "main": "CF.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "keywords": [
+    "cloudflare-workers",
+    "vless",
+    "telegram-bot",
+    "proxy",
+    "websocket",
+    "sub-store",
+    "sing-box",
+    "clash"
+  ],
+  "author": "aryarifki",
+  "license": "CC0-1.0",
+  "devDependencies": {
+    "wrangler": "^4.151.0"
+  }
+}

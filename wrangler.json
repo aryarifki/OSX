@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cf-tunnel",
+  "main": "CF.js",
+  "compatibility_date": "2024-09-23",
+  "vars": {
+    "CUSTOM_DOMAIN": "cugarete.me",
+    "DEFAULT_BUG": "104.17.3.81",
+    "BOT_TOKEN": "YOUR_TELEGRAM_BOT_TOKEN_HERE"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "SERVERS_KV",
+      "id": "e4e76688851444e4aa8d550237fbc46a"
+    }
+  ]
+}

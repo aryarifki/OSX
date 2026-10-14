@@ -1,0 +1,10 @@
+node_modules/
+.wrangler/
+dist/
+*.log
+.env
+CF.js.bak
+bare.js
+test*.js
+build_cf.py
+update_with_ssrsub.py
