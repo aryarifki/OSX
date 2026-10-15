@@ -877,7 +877,7 @@ async function getDonationInfo(env) {
             if (d && d.trim()) return d.trim();
         } catch {}
     }
-    return `💖 <b>DONASI AVENIA WORKERS</b>\n\nDukungan Anda sangat berarti untuk membantu biaya operasional, sewa domain, dan pemeliharaan server proxy agar tetap aktif dan cepat 24/7!\n\n☕ <b>Saweria:</b>\n<code>https://saweria.co/avenia</code>\n\n💳 <b>DANA / OVO / GoPay:</b>\n<code>0812-xxxx-xxxx</code>\n\n<i>(Admin dapat mengubah info donasi ini melalui KV: DONATION_INFO)</i>\n\nTerima kasih banyak atas donasi dan kebaikan Anda! 🙏`;
+    return `💖 <b>DUKUNGAN & DONASI AVENIA WORKERS</b>\n\nDukungan Anda sangat berarti untuk membantu biaya operasional server, sewa domain, dan pemeliharaan agar layanan tetap aktif dan cepat 24/7.\n\nBagi Anda yang ingin berdonasi via E-Wallet:\n\n💳 <b>Gopay / ShopeePay / DANA:</b>\n<code>087882725845</code>\n<i>(Ketuk nomor di atas untuk menyalin langsung)</i>\n\nTerima kasih banyak atas apresiasi, donasi, dan kebaikan Anda! 🙏`;
 }
 
 async function getWorkerStats(env) {
